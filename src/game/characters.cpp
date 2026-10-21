@@ -300,9 +300,9 @@ uint8_t* PlayerObjectNow()
     return PlayerAlive() ? g_Player : (PlayerByManagerSlot(0) ? PlayerByManagerSlot(0) : PlayerByManagerSlot(1));
 }
 
-void ApplySaberColor(bool onlyChanged = false)
+void ApplySaberColor(bool onlyChanged = false, uint8_t* target = nullptr, bool applyGlobal = true)
 {
-    uint8_t* player = PlayerObjectNow();
+    uint8_t* player = target ? target : PlayerObjectNow();
     if (!player || !HasSaberColor(player))
         return;
     // Grievous and Serra carry two sabers; give each fighter their requested pair, whatever colour
@@ -311,9 +311,9 @@ void ApplySaberColor(bool onlyChanged = false)
     const bool serra = IsSerra(player);
     static const float kGreen[3] = { 0.0f, 1.0f, 0.0f };
     static const float kBlue[3] = { 0.0f, 0.0f, 1.0f };
-    if (g_SaberColorSet)
+    if (g_SaberColorSet && applyGlobal)
         *reinterpret_cast<const float**>(player + kCharacterSaberColor) = g_SaberColor;
-    if (!g_SaberColorSet && !grievous && !serra)
+    if (!(g_SaberColorSet && applyGlobal) && !grievous && !serra)
         return;
     for (int i = 0; i < kWeaponSlots; ++i) {
         uint8_t* weapon = *reinterpret_cast<uint8_t**>(player + kCharacterWeapons + i * 0x20);
@@ -322,7 +322,7 @@ void ApplySaberColor(bool onlyChanged = false)
         const uint32_t vtable = *reinterpret_cast<uint32_t*>(weapon);
         if (std::find(std::begin(kSaberVtables), std::end(kSaberVtables), vtable) == std::end(kSaberVtables))
             continue;
-        const float* colour = g_SaberColorSet ? g_SaberColor
+        const float* colour = g_SaberColorSet && applyGlobal ? g_SaberColor
             : grievous ? (i % 2 == 0 ? kGreen : kBlue)
             : (i % 2 == 0 ? kBlue : kGreen);
         if (onlyChanged && std::memcmp(weapon + kSaberColor, colour, sizeof(g_SaberColor)) == 0)
@@ -1766,9 +1766,30 @@ void PlayerFrame()
         ++it;
     }
 
-    uint8_t* player = PlayerObjectNow();
-    if (g_SaberColorSet || (player && (IsGrievous(player) || IsSerra(player))))
-        ApplySaberColor(true);
+    uint8_t* overridePlayer = PlayerObjectNow();
+    if (g_SaberColorSet)
+        ApplySaberColor(true, overridePlayer);
+
+    // Versus can have either fighter in either manager slot, while g_Player may still point at a
+    // valid story player from an earlier level. Check both current fighters as well as the live
+    // story player so a stale capture cannot hide Grievous or Serra in the other slot.
+    uint8_t* candidates[] = {
+        PlayerAlive() ? g_Player : nullptr,
+        PlayerByManagerSlot(0),
+        PlayerByManagerSlot(1),
+    };
+    for (int i = 0; i < std::size(candidates); ++i) {
+        uint8_t* candidate = candidates[i];
+        if (!candidate || (g_SaberColorSet && candidate == overridePlayer))
+            continue;
+        bool seen = false;
+        for (int j = 0; j < i; ++j)
+            seen |= candidates[j] == candidate;
+        if (seen)
+            continue;
+        if (IsGrievous(candidate) || IsSerra(candidate))
+            ApplySaberColor(true, candidate, false);
+    }
 
     // Infinite Force: the player's Force kept at its maximum (Jedi-like characters have it).
     if (g_InfiniteForce && PlayerAlive() && HasSaberColor(g_Player))
