@@ -264,6 +264,14 @@ bool IsGrievous(uint8_t* character)
     return name && _stricmp(name, "IGrievous") == 0;
 }
 
+bool IsSerra(uint8_t* character)
+{
+    const auto typeName = reinterpret_cast<const char*(__fastcall*)(uint8_t*, void*)>(
+        (*reinterpret_cast<void* const* const*>(character))[3]);
+    const char* name = typeName(character, nullptr);
+    return name && _stricmp(name, "ISerra") == 0;
+}
+
 // Gives the player's sabers the chosen colour (or, with none, nothing: they keep theirs until the
 // next level start).
 // `onlyChanged`: only sabers whose colour (saber +0x814, three floats, as SetColor stores it) is not the
@@ -297,14 +305,15 @@ void ApplySaberColor(bool onlyChanged = false)
     uint8_t* player = PlayerObjectNow();
     if (!player || !HasSaberColor(player))
         return;
-    // Grievous carries two sabers: green for the first, blue for the second, whatever colour the
-    // versus table (or the level) gave him.
+    // Grievous and Serra carry two sabers; give each fighter their requested pair, whatever colour
+    // the versus table (or the level) gave them.
     const bool grievous = IsGrievous(player);
+    const bool serra = IsSerra(player);
     static const float kGreen[3] = { 0.0f, 1.0f, 0.0f };
     static const float kBlue[3] = { 0.0f, 0.0f, 1.0f };
     if (g_SaberColorSet)
         *reinterpret_cast<const float**>(player + kCharacterSaberColor) = g_SaberColor;
-    if (!g_SaberColorSet && !grievous)
+    if (!g_SaberColorSet && !grievous && !serra)
         return;
     for (int i = 0; i < kWeaponSlots; ++i) {
         uint8_t* weapon = *reinterpret_cast<uint8_t**>(player + kCharacterWeapons + i * 0x20);
@@ -313,7 +322,9 @@ void ApplySaberColor(bool onlyChanged = false)
         const uint32_t vtable = *reinterpret_cast<uint32_t*>(weapon);
         if (std::find(std::begin(kSaberVtables), std::end(kSaberVtables), vtable) == std::end(kSaberVtables))
             continue;
-        const float* colour = g_SaberColorSet ? g_SaberColor : (i % 2 == 0 ? kGreen : kBlue);
+        const float* colour = g_SaberColorSet ? g_SaberColor
+            : grievous ? (i % 2 == 0 ? kGreen : kBlue)
+            : (i % 2 == 0 ? kBlue : kGreen);
         if (onlyChanged && std::memcmp(weapon + kSaberColor, colour, sizeof(g_SaberColor)) == 0)
             continue;
         const auto setColor = reinterpret_cast<void(__fastcall*)(uint8_t*, void*, const float*)>(
@@ -1755,7 +1766,8 @@ void PlayerFrame()
         ++it;
     }
 
-    if (g_SaberColorSet || (PlayerObjectNow() && IsGrievous(PlayerObjectNow())))
+    uint8_t* player = PlayerObjectNow();
+    if (g_SaberColorSet || (player && (IsGrievous(player) || IsSerra(player))))
         ApplySaberColor(true);
 
     // Infinite Force: the player's Force kept at its maximum (Jedi-like characters have it).
