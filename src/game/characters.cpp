@@ -256,6 +256,14 @@ bool HasSaberColor(uint8_t* character)
     return isA(character, nullptr, kJediType);
 }
 
+bool IsGrievous(uint8_t* character)
+{
+    const auto typeName = reinterpret_cast<const char*(__fastcall*)(uint8_t*, void*)>(
+        (*reinterpret_cast<void* const* const*>(character))[3]);
+    const char* name = typeName(character, nullptr);
+    return name && _stricmp(name, "IGrievous") == 0;
+}
+
 // Gives the player's sabers the chosen colour (or, with none, nothing: they keep theirs until the
 // next level start).
 // `onlyChanged`: only sabers whose colour (saber +0x814, three floats, as SetColor stores it) is not the
@@ -263,25 +271,54 @@ bool HasSaberColor(uint8_t* character)
 // sabers themselves, so the player's are checked every frame.
 constexpr uint32_t kSaberColor = 0x814;
 
+// The game manager's players (Versus included): instance ids at manager + 0x2A4, one per slot.
+// The story capture (PlayerVariant) never sees a versus fighter, so the manager is the source of
+// truth when g_Player is null.
+constexpr uint32_t kSaberGameManager = 0x007EB964;
+constexpr uint32_t kSaberManagerPlayerIds = 0x2A4;
+constexpr uint32_t kSaberObjectById = 0x000A31F0;
+
+uint8_t* PlayerByManagerSlot(int slot)
+{
+    uint8_t* manager = *reinterpret_cast<uint8_t**>(uintptr_t(kSaberGameManager));
+    if (!manager)
+        return nullptr;
+    const uint32_t id = *reinterpret_cast<const uint32_t*>(manager + kSaberManagerPlayerIds + slot * 4);
+    return id ? reinterpret_cast<uint8_t*(__cdecl*)(uint32_t)>(uintptr_t(kSaberObjectById))(id) : nullptr;
+}
+
+uint8_t* PlayerObjectNow()
+{
+    return PlayerAlive() ? g_Player : (PlayerByManagerSlot(0) ? PlayerByManagerSlot(0) : PlayerByManagerSlot(1));
+}
+
 void ApplySaberColor(bool onlyChanged = false)
 {
-    if (!PlayerAlive() || !HasSaberColor(g_Player))
+    uint8_t* player = PlayerObjectNow();
+    if (!player || !HasSaberColor(player))
         return;
-    *reinterpret_cast<const float**>(g_Player + kCharacterSaberColor) = g_SaberColorSet ? g_SaberColor : nullptr;
-    if (!g_SaberColorSet)
+    // Grievous carries two sabers: green for the first, blue for the second, whatever colour the
+    // versus table (or the level) gave him.
+    const bool grievous = IsGrievous(player);
+    static const float kGreen[3] = { 0.0f, 1.0f, 0.0f };
+    static const float kBlue[3] = { 0.0f, 0.0f, 1.0f };
+    if (g_SaberColorSet)
+        *reinterpret_cast<const float**>(player + kCharacterSaberColor) = g_SaberColor;
+    if (!g_SaberColorSet && !grievous)
         return;
     for (int i = 0; i < kWeaponSlots; ++i) {
-        uint8_t* weapon = *reinterpret_cast<uint8_t**>(g_Player + kCharacterWeapons + i * 0x20);
+        uint8_t* weapon = *reinterpret_cast<uint8_t**>(player + kCharacterWeapons + i * 0x20);
         if (!weapon)
             continue;
         const uint32_t vtable = *reinterpret_cast<uint32_t*>(weapon);
         if (std::find(std::begin(kSaberVtables), std::end(kSaberVtables), vtable) == std::end(kSaberVtables))
             continue;
-        if (onlyChanged && std::memcmp(weapon + kSaberColor, g_SaberColor, sizeof(g_SaberColor)) == 0)
+        const float* colour = g_SaberColorSet ? g_SaberColor : (i % 2 == 0 ? kGreen : kBlue);
+        if (onlyChanged && std::memcmp(weapon + kSaberColor, colour, sizeof(g_SaberColor)) == 0)
             continue;
         const auto setColor = reinterpret_cast<void(__fastcall*)(uint8_t*, void*, const float*)>(
             reinterpret_cast<void* const*>(uintptr_t(vtable))[kSaberSetColor / 4]);
-        setColor(weapon, nullptr, g_SaberColor);
+        setColor(weapon, nullptr, colour);
     }
 }
 
@@ -1718,7 +1755,7 @@ void PlayerFrame()
         ++it;
     }
 
-    if (g_SaberColorSet)
+    if (g_SaberColorSet || (PlayerObjectNow() && IsGrievous(PlayerObjectNow())))
         ApplySaberColor(true);
 
     // Infinite Force: the player's Force kept at its maximum (Jedi-like characters have it).
